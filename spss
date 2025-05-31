@@ -1,0 +1,249 @@
+from scipy.stats import ttest_ind, ttest_rel
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pyreadstat
+import scipy.stats as stats
+import statsmodels.api as sm
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import matthews_corrcoef
+from scipy.stats import norm, pearsonr, spearmanr
+import pingouin as pg
+
+
+# ---------- .sav-Datei laden ----------
+dateiname = "Gesamt_Laengs_SoSe25.sav"  # ggf. Pfad anpassen
+try:
+    df, meta = pyreadstat.read_sav(dateiname)
+    print(f"Datei '{dateiname}' erfolgreich geladen.\n")
+except:
+    print(f"Fehler: Datei '{dateiname}' konnte nicht geladen werden.")
+    exit()
+
+# ---------- Hilfsfunktionen ----------
+def schätze_skalenniveau(serie):
+    if pd.api.types.is_numeric_dtype(serie):
+        if serie.nunique() <= 5:
+            return "ordinal"
+        else:
+            return "metrisch"
+    elif serie.nunique() == 2:
+        return "dichotom"
+    else:
+        return "nominal"
+# ---------- t-Test ----------
+def t_test_modul():
+    print("\n=== t-Test Modul ===")
+    print("Wähle Testtyp:")
+    print("1. Unabhängiger t-Test (zwei Gruppen, z. B. Männer vs. Frauen)")
+    print("2. Abhängiger t-Test (Messwiederholung, z. B. vorher/nachher)")
+    wahl = input("Auswahl (1/2): ")
+
+    if wahl == "1":
+        print("Spalten:", df.columns.tolist())
+        av = input("Abhängige Variable (metrisch): ")
+        uv = input("Unabhängige Gruppenvariable (z. B. geschlecht): ")
+
+        if av not in df.columns or uv not in df.columns:
+            print("Ungültige Spalten.")
+            return
+
+        gruppe = df[uv].dropna().unique()
+        if len(gruppe) != 2:
+            print("Für den Test müssen genau 2 Gruppen vorliegen.")
+            return
+
+        g1 = df[df[uv] == gruppe[0]][av].dropna()
+        g2 = df[df[uv] == gruppe[1]][av].dropna()
+
+        t, p = ttest_ind(g1, g2, equal_var=False)
+        d = (g1.mean() - g2.mean()) / np.sqrt(((g1.std() ** 2 + g2.std() ** 2) / 2))
+        n1, n2 = len(g1), len(g2)
+        g = d * (1 - (3 / (4 * (n1 + n2) - 9)))
+        delta = (g1.mean() - g2.mean()) / g2.std()
+
+        print(f"\nMittelwerte: Gruppe 1 = {g1.mean():.2f}, Gruppe 2 = {g2.mean():.2f}")
+        print(f"t = {t:.2f}, p = {p:.4f}")
+        print(f"Cohen's d = {d:.2f}, Hedges' g = {g:.2f}, Glass’ Δ = {delta:.2f}")
+        if p < 0.05:
+            print("→ Unterschied ist statistisch signifikant (p < 0.05)")
+        else:
+            print("→ Kein signifikanter Unterschied (p ≥ 0.05)")
+
+    elif wahl == "2":
+        print("Spalten:", df.columns.tolist())
+        var1 = input("Messung 1 (z. B. vorher): ")
+        var2 = input("Messung 2 (z. B. nachher): ")
+
+        if var1 not in df.columns or var2 not in df.columns:
+            print("Ungültige Spalten.")
+            return
+
+        x = df[var1].dropna()
+        y = df[var2].dropna()
+        common = x.index.intersection(y.index)
+        x = x.loc[common]
+        y = y.loc[common]
+
+        t, p = ttest_rel(x, y)
+        d = (x.mean() - y.mean()) / x.std()
+
+        print(f"\nMittelwerte: vor = {x.mean():.2f}, nach = {y.mean():.2f}")
+        print(f"t = {t:.2f}, p = {p:.4f}, Cohen's d = {d:.2f}")
+        if p < 0.05:
+            print("→ Unterschied ist statistisch signifikant (p < 0.05)")
+        else:
+            print("→ Kein signifikanter Unterschied (p ≥ 0.05)")
+    else:
+        print("Ungültige Eingabe.")
+
+# ---------- Hypothesentest ----------
+
+def hypothesen_test():
+    print("\n=== Hypothesentest gegen festen Wert (z-Test ähnlich) ===")
+    spalte = input("Spaltenname (metrisch): ")
+    if spalte not in df.columns:
+        print("Ungültige Spalte.")
+        return
+    wert = float(input("Gegen welchen Vergleichswert testen? "))
+    daten = df[spalte].dropna()
+    t, p = stats.ttest_1samp(daten, wert)
+    print(f"\nt = {t:.2f}, p = {p:.4f}")
+    if p < 0.05:
+        print("→ Signifikanter Unterschied zum Vergleichswert (p < 0.05)")
+    else:
+        print("→ Kein signifikanter Unterschied (p ≥ 0.05)")
+        
+# ---------- Analyse einzelner Variable ----------
+def analyse(spalte):
+    daten = df[spalte].dropna()
+    print(f"\nAnalyse: {spalte}")
+    print("Modus:", daten.mode().values)
+    print("Median:", daten.median())
+    print("Mittelwert:", daten.mean())
+    print("Standardabweichung:", daten.std())
+    print("Varianz:", daten.var())
+    print("Vx:", daten.std() / daten.mean())
+    print("Schiefe:", daten.skew())
+    print("Exzess:", daten.kurtosis())
+
+    print("\nWähle grafische Darstellung:")
+    print("1. Histogramm\n2. Boxplot\n3. Balkendiagramm")
+    wahl = input("Auswahl (1/2/3): ")
+
+    if wahl == "1":
+        sns.histplot(daten, kde=True, stat="density")
+        mu, sigma = daten.mean(), daten.std()
+        x = np.linspace(min(daten), max(daten), 100)
+        plt.plot(x, norm.pdf(x, mu, sigma), color='red', linestyle='--', label='Normalverteilung')
+        plt.legend()
+    elif wahl == "2":
+        sns.boxplot(x=daten)
+    elif wahl == "3":
+        daten.value_counts().plot(kind='bar')
+    else:
+        print("Ungültige Eingabe, zeige Histogramm.")
+        sns.histplot(daten, kde=True)
+    plt.title(f"{spalte}")
+    plt.xlabel(spalte)
+    plt.ylabel("Häufigkeit")
+    plt.show()
+
+# ---------- Zusammenhangsanalyse ----------
+def berechne_zusammenhang(x, y):
+    x = x.dropna()
+    y = y.dropna()
+    gemein = x.index.intersection(y.index)
+    x = x.loc[gemein]
+    y = y.loc[gemein]
+
+    typ_x = schätze_skalenniveau(x)
+    typ_y = schätze_skalenniveau(y)
+
+    print(f"\nSkalenniveau-Schätzung: x = {typ_x}, y = {typ_y}")
+
+    if typ_x == typ_y == "metrisch":
+        r, p = pearsonr(x, y)
+        print(f"Pearson-Korrelation: r = {r:.3f}, p = {p:.3f}")
+    elif "ordinal" in [typ_x, typ_y] and "metrisch" not in [typ_x, typ_y]:
+        r, p = spearmanr(x, y)
+        print(f"Spearman-Korrelation: r = {r:.3f}, p = {p:.3f}")
+    elif typ_x == typ_y == "dichotom":
+        r = matthews_corrcoef(x, y)
+        print(f"Phi-Koeffizient: r = {r:.3f}")
+    elif typ_x == typ_y == "nominal":
+        kreuz = pd.crosstab(x, y)
+        chi2, p, dof, exp = stats.chi2_contingency(kreuz)
+        n = kreuz.sum().sum()
+        phi2 = chi2 / n
+        k, r = kreuz.shape
+        cramer_v = np.sqrt(phi2 / min(k - 1, r - 1))
+        print(f"Cramérs V: {cramer_v:.3f}, Chi² = {chi2:.2f}, p = {p:.3f}")
+    elif "nominal" in [typ_x, typ_y] and "metrisch" in [typ_x, typ_y]:
+        nominal = x if typ_x == "nominal" else y
+        metrisch = y if typ_x == "nominal" else x
+        dummy = pd.get_dummies(nominal, drop_first=True)
+        eta2 = sm.OLS(metrisch, sm.add_constant(dummy)).fit().rsquared
+        print(f"Eta² (η²): {eta2:.3f}")
+    else:
+        print("Zusammenhangsmaß für diese Kombination nicht implementiert.")
+
+# ---------- Kreuztabelle + Chi² ----------
+def kreuztabelle():
+    print(df.columns.tolist())
+    x = input("1. Variable: ")
+    y = input("2. Variable: ")
+    if x in df.columns and y in df.columns:
+        kreuz = pd.crosstab(df[x], df[y])
+        print("\nKreuztabelle:\n", kreuz)
+        chi2, p, dof, _ = stats.chi2_contingency(kreuz)
+        print(f"\nChi² = {chi2:.2f}, p-Wert = {p:.3f}")
+    else:
+        print("Ungültige Eingabe.")
+
+# ---------- Menü ----------
+def menü():
+    while True:
+        print("\n=== Hauptmenü ===")
+        print("1. Spalten anzeigen")
+        print("2. Datenvorschau")
+        print("3. Spalte analysieren")
+        print("4. Zusammenhang zwischen zwei Variablen")
+        print("5. Kreuztabelle & Chi²-Test")
+        print("6. t-Test (unabhängig / abhängig)")
+        print("7. Hypothesentest (vs. fester Wert)")
+        print("8. Beenden")
+        wahl = input("Auswahl: ")
+
+        if wahl == "1":
+            print(df.columns.tolist())
+        elif wahl == "2":
+            print(df.head())
+        elif wahl == "3":
+            spalte = input("Spaltenname: ")
+            if spalte in df.columns:
+                analyse(spalte)
+            else:
+                print("Spalte nicht gefunden.")
+        elif wahl == "4":
+            x = input("Erste Variable: ")
+            y = input("Zweite Variable: ")
+            if x in df.columns and y in df.columns:
+                berechne_zusammenhang(df[x], df[y])
+            else:
+                print("Ungültige Eingabe.")
+        elif wahl == "5":
+            kreuztabelle()
+        elif wahl == "6":
+            t_test_modul()
+        elif wahl == "7":
+            hypothesen_test()
+        elif wahl == "8":
+            print("Programm beendet.")
+            break
+        else:
+            print("Ungültige Eingabe.")
+
+# ---------- Start ----------
+menü()
